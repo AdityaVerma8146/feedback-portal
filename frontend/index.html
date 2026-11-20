@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Feedback Portal</title>
+<style>
+  body{font-family:Arial,sans-serif;background:#f3f6fb;margin:0;color:#222}
+  header{background:#232f3e;color:#fff;padding:18px 24px}
+  header span{color:#ff9900}
+  main{max-width:760px;margin:24px auto;padding:0 16px}
+  .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+  label{display:block;margin:12px 0 4px;font-weight:bold}
+  input,select,textarea{width:100%;padding:9px;border:1px solid #bbb;border-radius:4px;box-sizing:border-box;font-size:15px}
+  button{margin-top:16px;background:#ff9900;border:0;padding:10px 22px;font-size:16px;border-radius:4px;cursor:pointer}
+  #status{margin-top:12px;font-weight:bold}
+  .item{border-bottom:1px solid #eee;padding:10px 0}
+  .item small{color:#666}
+</style>
+</head>
+<body>
+<header><h2>Student Feedback Portal &mdash; <span>Serverless on AWS</span></h2></header>
+<main>
+  <div class="card">
+    <h3>Submit Feedback</h3>
+    <label for="name">Name</label><input id="name" maxlength="80">
+    <label for="email">Email</label><input id="email" type="email" maxlength="120">
+    <label for="rating">Rating</label>
+    <select id="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select>
+    <label for="message">Message</label><textarea id="message" rows="4" maxlength="1000"></textarea>
+    <button onclick="submitFeedback()">Submit</button>
+    <div id="status"></div>
+  </div>
+  <div class="card">
+    <h3>Recent Feedback</h3>
+    <div id="list">Loading...</div>
+  </div>
+</main>
+<script>
+  // Replace with the ApiUrl value from the CloudFormation stack outputs
+  const API_URL = "REPLACE_WITH_API_URL";
+
+  async function submitFeedback() {
+    const status = document.getElementById("status");
+    const body = {
+      name: document.getElementById("name").value,
+      email: document.getElementById("email").value,
+      rating: document.getElementById("rating").value,
+      message: document.getElementById("message").value
+    };
+    try {
+      const res = await fetch(API_URL + "/feedback", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      status.style.color = res.ok ? "green" : "crimson";
+      status.textContent = data.message || data.error;
+      if (res.ok) { document.getElementById("message").value = ""; loadFeedback(); }
+    } catch (e) {
+      status.style.color = "crimson";
+      status.textContent = "Network error. Please try again.";
+    }
+  }
+
+  async function loadFeedback() {
+    const list = document.getElementById("list");
+    try {
+      const res = await fetch(API_URL + "/feedback");
+      const data = await res.json();
+      list.innerHTML = "";
+      if (!data.items.length) { list.textContent = "No feedback yet."; return; }
+      data.items.forEach(i => {
+        const d = document.createElement("div");
+        d.className = "item";
+        const when = new Date(i.createdAt * 1000).toLocaleString();
+        d.innerHTML = "<strong></strong> &mdash; " + i.rating + "/5<br><span></span><br><small>" + when + "</small>";
+        d.querySelector("strong").textContent = i.name;   // textContent prevents XSS
+        d.querySelector("span").textContent = i.message;
+        list.appendChild(d);
+      });
+    } catch (e) { list.textContent = "Could not load feedback."; }
+  }
+  loadFeedback();
+</script>
+</body>
+</html>

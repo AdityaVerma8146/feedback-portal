@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless Student Feedback Portal (S3 + CloudFront + API Gateway + Lambda + DynamoDB + SNS)
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address that receives a notification for each new feedback
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 128
+
+Resources:
+  # ---------- Database ----------
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: feedbackId, AttributeType: S}
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: createdAt, AttributeType: N}
+      KeySchema:
+        - {AttributeName: feedbackId, KeyType: HASH}
+      GlobalSecondaryIndexes:
+        - IndexName: byCreatedAt
+          KeySchema:
+            - {AttributeName: pk, KeyType: HASH}
+            - {AttributeName: createdAt, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+
+  # ---------- Notifications ----------
+  FeedbackTopic:
+    Type: AWS::SNS::Topic
+  FeedbackSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref FeedbackTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # ---------- Compute + API ----------
+  FeedbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambda_function.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref FeedbackTable
+          TOPIC_ARN: !Ref FeedbackTopic
+      Policies:                       # least-privilege IAM
+        - DynamoDBCrudPolicy: {TableName: !Ref FeedbackTable}
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub '${FeedbackTable.Arn}/index/byCreatedAt'
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt FeedbackTopic.TopicName}
+      Events:
+        PostFeedback:
+          Type: Api
+          Properties: {Path: /feedback, Method: post, RestApiId: !Ref FeedbackApi}
+        GetFeedback:
+          Type: Api
+          Properties: {Path: /feedback, Method: get, RestApiId: !Ref FeedbackApi}
+
+  FeedbackApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+      MethodSettings:
+        - {ResourcePath: '/*', HttpMethod: '*', ThrottlingBurstLimit: 20, ThrottlingRateLimit: 10}
+
+  # ---------- Static website hosting ----------
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: s3origin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            S3OriginConfig: {OriginAccessIdentity: ''}
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+        DefaultCacheBehavior:
+          TargetOriginId: s3origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # Managed-CachingOptimized
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub '${WebsiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  # ---------- Monitoring ----------
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Lambda errors detected
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - {Name: FunctionName, Value: !Ref FeedbackFunction}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref FeedbackTopic]
+
+Outputs:
+  ApiUrl:
+    Value: !Sub 'https://${FeedbackApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+  WebsiteUrl:
+    Value: !Sub 'https://${Distribution.DomainName}'
+  BucketName:
+    Value: !Ref WebsiteBucket
