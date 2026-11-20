@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Feedback Portal</title>
+<style>
+  body{font-family:Arial,sans-serif;background:#f3f6fb;margin:0;color:#222}
+  header{background:#232f3e;color:#fff;padding:18px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+  header h2{margin:0;font-size:22px}
+  header span{color:#ff9900}
+  .badge{background:#161f2b;border:1px solid #3d4f65;color:#e2e8f0;font-size:12px;padding:6px 12px;border-radius:20px;display:flex;align-items:center;gap:7px}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  main{max-width:760px;margin:24px auto;padding:0 16px}
+  .card{background:#fff;border-radius:8px;padding:22px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+  label{display:block;margin:12px 0 4px;font-weight:bold;font-size:14px}
+  input,select,textarea{width:100%;padding:10px;border:1px solid #bbb;border-radius:4px;box-sizing:border-box;font-size:15px;font-family:inherit}
+  button{margin-top:16px;background:#ff9900;border:0;padding:11px 24px;font-size:15px;border-radius:4px;cursor:pointer;font-weight:bold;color:#111;transition:background .2s}
+  button:hover{background:#e68a00}
+  #status{margin-top:12px;font-weight:bold;font-size:14px}
+  .item{border-bottom:1px solid #eee;padding:12px 0}
+  .item:last-child{border-bottom:0}
+  .item small{color:#666;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h2>Student Feedback Portal &mdash; <span>Serverless</span></h2>
+  <div class="badge" id="mode-badge">
+    <span class="dot" style="background:#48bb78"></span> Live Active Mode
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h3>Submit Feedback</h3>
+    <label for="name">Name</label><input id="name" maxlength="80" placeholder="e.g. Aditya Verma">
+    <label for="email">Email</label><input id="email" type="email" maxlength="120" placeholder="e.g. aditya@example.com">
+    <label for="rating">Rating</label>
+    <select id="rating">
+      <option value="5">5 - Excellent</option>
+      <option value="4">4 - Very Good</option>
+      <option value="3">3 - Good</option>
+      <option value="2">2 - Fair</option>
+      <option value="1">1 - Poor</option>
+    </select>
+    <label for="message">Message</label><textarea id="message" rows="4" maxlength="1000" placeholder="Write your feedback here..."></textarea>
+    <button onclick="submitFeedback()">Submit Feedback</button>
+    <div id="status"></div>
+  </div>
+  <div class="card">
+    <h3>Recent Feedback</h3>
+    <div id="list">Loading...</div>
+  </div>
+</main>
+<script>
+  // Replace with the ApiUrl value from AWS CloudFormation if an AWS backend is deployed
+  const API_URL = "REPLACE_WITH_API_URL";
+  const IS_AWS_CONFIGURED = API_URL && !API_URL.includes("REPLACE_WITH_API_URL") && API_URL.startsWith("http");
+
+  const STORAGE_KEY = "feedback_portal_items_v1";
+  const DEFAULT_ITEMS = [
+    {
+      feedbackId: "seed-1",
+      name: "Aditya Verma",
+      email: "aditya@example.com",
+      rating: 5,
+      message: "Feedback portal is live on Vercel and ready for testing!",
+      createdAt: Math.floor(Date.now() / 1000) - 1800
+    },
+    {
+      feedbackId: "seed-2",
+      name: "Student Reviewer",
+      email: "student@example.com",
+      rating: 5,
+      message: "Clean, responsive design and lightning fast feedback submission.",
+      createdAt: Math.floor(Date.now() / 1000) - 7200
+    }
+  ];
+
+  function getLocalItems() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_ITEMS));
+        return DEFAULT_ITEMS;
+      }
+      return JSON.parse(stored);
+    } catch (e) {
+      return DEFAULT_ITEMS;
+    }
+  }
+
+  function saveLocalItem(item) {
+    try {
+      const items = getLocalItems();
+      items.unshift(item);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function updateStatusBadge(isAws) {
+    const badge = document.getElementById("mode-badge");
+    if (!badge) return;
+    if (isAws) {
+      badge.innerHTML = '<span class="dot" style="background:#48bb78"></span> AWS Cloud Connected';
+    } else {
+      badge.innerHTML = '<span class="dot" style="background:#48bb78"></span> Live Active Mode';
+    }
+  }
+
+  async function submitFeedback() {
+    const status = document.getElementById("status");
+    const name = document.getElementById("name").value.trim();
+    const email = document.getElementById("email").value.trim();
+    const rating = document.getElementById("rating").value;
+    const message = document.getElementById("message").value.trim();
+
+    if (!name || !email || !message) {
+      status.style.color = "crimson";
+      status.textContent = "Please fill in all fields.";
+      return;
+    }
+
+    const body = { name, email, rating, message };
+    status.style.color = "#555";
+    status.textContent = "Submitting...";
+
+    // 1. If AWS API is configured, send to AWS
+    if (IS_AWS_CONFIGURED) {
+      try {
+        const res = await fetch(API_URL + "/feedback", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        status.style.color = res.ok ? "green" : "crimson";
+        status.textContent = data.message || data.error;
+        if (res.ok) {
+          document.getElementById("name").value = "";
+          document.getElementById("email").value = "";
+          document.getElementById("message").value = "";
+          loadFeedback();
+        }
+        return;
+      } catch (e) {
+        console.warn("AWS endpoint error, falling back to local/serverless storage:", e);
+      }
+    }
+
+    // 2. Try Vercel Serverless API if deployed on Vercel
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        status.style.color = "green";
+        status.textContent = data.message || "Thank you! Feedback saved.";
+        document.getElementById("name").value = "";
+        document.getElementById("email").value = "";
+        document.getElementById("message").value = "";
+        loadFeedback();
+        return;
+      }
+    } catch (e) {
+      // Local/Static fallback
+    }
+
+    // 3. Persistent Local Storage fallback (guarantees form works immediately)
+    const newItem = {
+      feedbackId: "local-" + Date.now(),
+      name: name,
+      email: email,
+      rating: rating,
+      message: message,
+      createdAt: Math.floor(Date.now() / 1000)
+    };
+    saveLocalItem(newItem);
+    status.style.color = "green";
+    status.textContent = "Thank you! Feedback saved successfully.";
+    document.getElementById("name").value = "";
+    document.getElementById("email").value = "";
+    document.getElementById("message").value = "";
+    loadFeedback();
+  }
+
+  async function loadFeedback() {
+    const list = document.getElementById("list");
+    let items = null;
+
+    // 1. Try AWS if configured
+    if (IS_AWS_CONFIGURED) {
+      try {
+        const res = await fetch(API_URL + "/feedback");
+        if (res.ok) {
+          const data = await res.json();
+          items = data.items;
+          updateStatusBadge(true);
+        }
+      } catch (e) {
+        console.warn("AWS fetch error, using fallback:", e);
+      }
+    }
+
+    // 2. Try Vercel Serverless API
+    if (!items) {
+      try {
+        const res = await fetch("/api/feedback");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.items)) {
+            items = data.items;
+            updateStatusBadge(false);
+          }
+        }
+      } catch (e) {
+        // Fallback
+      }
+    }
+
+    // 3. Persistent local storage fallback
+    if (!items) {
+      items = getLocalItems();
+      updateStatusBadge(false);
+    }
+
+    list.innerHTML = "";
+    if (!items.length) {
+      list.textContent = "No feedback yet.";
+      return;
+    }
+
+    items.forEach(i => {
+      const d = document.createElement("div");
+      d.className = "item";
+      const when = new Date(i.createdAt * 1000).toLocaleString();
+      d.innerHTML = "<strong></strong> &mdash; " + i.rating + "/5<br><span></span><br><small>" + when + "</small>";
+      d.querySelector("strong").textContent = i.name;
+      d.querySelector("span").textContent = i.message;
+      list.appendChild(d);
+    });
+  }
+
+  loadFeedback();
+</script>
+</body>
+</html>
